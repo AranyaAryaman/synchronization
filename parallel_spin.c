@@ -4,7 +4,7 @@
 #include <pthread.h>
 #include <assert.h>
 #include <sys/time.h>
-#include <libkern/OSAtomic.h>
+#include <bits/pthreadtypes.h>
 
 #define NUM_BUCKETS 5     // Buckets in hash table
 #define NUM_KEYS 100000   // Number of keys inserted per thread
@@ -18,7 +18,7 @@ typedef struct _bucket_entry {
 } bucket_entry;
 
 bucket_entry *table[NUM_BUCKETS];
-OSSpinLock bucket_spin[NUM_BUCKETS];
+pthread_spinlock_t bucket_spin[NUM_BUCKETS];
 
 void panic(char *msg) {
   printf("%s\n", msg);
@@ -39,10 +39,10 @@ void insert(int key, int val) {
   e->key = key;
   e->val = val;
 
-  OSSpinLockLock(&bucket_spin[i]);
+  pthread_spin_lock(&bucket_spin[i]);
   e->next = table[i];
   table[i] = e;
-  OSSpinLockUnlock(&bucket_spin[i]);
+  pthread_spin_unlock(&bucket_spin[i]);
 }
 
 // Retrieves an entry from the hash table by key
@@ -51,14 +51,14 @@ bucket_entry * retrieve(int key) {
   int i = key % NUM_BUCKETS;
   bucket_entry *b;
 
-  OSSpinLockLock(&bucket_spin[i]);
+  pthread_spin_lock(&bucket_spin[i]);
   for (b = table[i]; b != NULL; b = b->next) {
     if (b->key == key) {
-      OSSpinLockUnlock(&bucket_spin[i]);
+      pthread_spin_unlock(&bucket_spin[i]);
       return b;
     }
   }
-  OSSpinLockUnlock(&bucket_spin[i]);
+  pthread_spin_unlock(&bucket_spin[i]);
   return NULL;
 }
 
@@ -111,7 +111,7 @@ int main(int argc, char **argv) {
 
   // Initialize spinlocks
   for (i = 0; i < NUM_BUCKETS; i++) {
-    bucket_spin[i] = OS_SPINLOCK_INIT;
+    pthread_spin_init(&bucket_spin[i], PTHREAD_PROCESS_PRIVATE);
   }
 
   // Insert keys in parallel
@@ -147,6 +147,11 @@ int main(int argc, char **argv) {
   end = now();
 
   printf("[main] Retrieved %ld/%d keys in %f seconds\n", NUM_KEYS - total_lost, NUM_KEYS, end - start);
+
+  // Destroy spinlocks
+  for (i = 0; i < NUM_BUCKETS; i++) {
+    pthread_spin_destroy(&bucket_spin[i]);
+  }
 
   return 0;
 }

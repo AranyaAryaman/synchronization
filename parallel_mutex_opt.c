@@ -5,7 +5,7 @@
 #include <assert.h>
 #include <sys/time.h>
 
-#define NUM_BUCKETS 5     // Buckets in hash table
+#define NUM_BUCKETS 10     // Buckets in hash table
 #define NUM_KEYS 100000   // Number of keys inserted per thread
 int num_threads = 1;      // Number of threads (configurable)
 int keys[NUM_KEYS];
@@ -17,7 +17,7 @@ typedef struct _bucket_entry {
 } bucket_entry;
 
 bucket_entry *table[NUM_BUCKETS];
-pthread_rwlock_t bucket_locks[NUM_BUCKETS];
+pthread_mutex_t bucket_mutex[NUM_BUCKETS];
 
 void panic(char *msg) {
   printf("%s\n", msg);
@@ -38,10 +38,10 @@ void insert(int key, int val) {
   e->key = key;
   e->val = val;
 
-  pthread_rwlock_wrlock(&bucket_locks[i]);
+  pthread_mutex_lock(&bucket_mutex[i]);
   e->next = table[i];
   table[i] = e;
-  pthread_rwlock_unlock(&bucket_locks[i]);
+  pthread_mutex_unlock(&bucket_mutex[i]);
 }
 
 // Retrieves an entry from the hash table by key
@@ -50,14 +50,11 @@ bucket_entry * retrieve(int key) {
   int i = key % NUM_BUCKETS;
   bucket_entry *b;
 
-  pthread_rwlock_rdlock(&bucket_locks[i]);
   for (b = table[i]; b != NULL; b = b->next) {
     if (b->key == key) {
-      pthread_rwlock_unlock(&bucket_locks[i]);
       return b;
     }
   }
-  pthread_rwlock_unlock(&bucket_locks[i]);
   return NULL;
 }
 
@@ -71,7 +68,7 @@ void * put_phase(void *arg) {
     insert(keys[key], tid);
   }
 
-  return NULL;
+  pthread_exit(NULL);
 }
 
 void * get_phase(void *arg) {
@@ -84,7 +81,7 @@ void * get_phase(void *arg) {
   }
   printf("[thread %ld] %ld keys lost!\n", tid, lost);
 
-  return (void *)lost;
+  pthread_exit((void *)lost);
 }
 
 int main(int argc, char **argv) {
@@ -93,7 +90,7 @@ int main(int argc, char **argv) {
   double start, end;
 
   if (argc != 2) {
-    panic("usage: ./parallel_mutex_opt <num_threads>");
+    panic("usage: ./parallel_mutex <num_threads>");
   }
   if ((num_threads = atoi(argv[1])) <= 0) {
     panic("must enter a valid number of threads to run");
@@ -108,9 +105,9 @@ int main(int argc, char **argv) {
     panic("out of memory allocating thread handles");
   }
 
-  // Initialize read-write locks
+  // Initialize mutexes
   for (i = 0; i < NUM_BUCKETS; i++) {
-    pthread_rwlock_init(&bucket_locks[i], NULL);
+    pthread_mutex_init(&bucket_mutex[i], NULL);
   }
 
   // Insert keys in parallel
@@ -147,9 +144,9 @@ int main(int argc, char **argv) {
 
   printf("[main] Retrieved %ld/%d keys in %f seconds\n", NUM_KEYS - total_lost, NUM_KEYS, end - start);
 
-  // Destroy read-write locks
+  // Destroy mutexes
   for (i = 0; i < NUM_BUCKETS; i++) {
-    pthread_rwlock_destroy(&bucket_locks[i]);
+    pthread_mutex_destroy(&bucket_mutex[i]);
   }
 
   return 0;
